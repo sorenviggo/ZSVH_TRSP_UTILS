@@ -42,10 +42,10 @@ REPORT ZSVH_TRSP_DOWNLOAD.
           IC_TR_DATA  type ICON_D,
           IS_TR_DWNLD type ABAP_BOOL,  " Will something be downloaded ?
           IC_TR_DWNLD type ICON_D,
-          PATH_COFL   type LOCALFILE,
-          FILE_COFL   type LOCALFILE,
-          PATH_DATA   type LOCALFILE,
-          FILE_DATA   type LOCALFILE,
+          PATH_COFL   type STRING,
+          FILE_COFL   type STRING,
+          PATH_DATA   type STRING,
+          FILE_DATA   type STRING,
           MESSAGE     type STRING,
         end of typ_s_alv_data,
         typ_t_alv_data type table of typ_s_alv_data WITH KEY TRKORR.
@@ -102,7 +102,7 @@ REPORT ZSVH_TRSP_DOWNLOAD.
             VALUE(RV_FOLDER_EXISTS) type ABAP_BOOL,
         DOES_SRV_FILE_EXIST
           IMPORTING
-            IV_FILE_PATH  type LOCALFILE
+            IV_FILE_PATH  type STRING
           RETURNING
             VALUE(RV_FILE_EXISTS) type ABAP_BOOL,
         CREATE_CLIENT_FOLDERS
@@ -149,6 +149,12 @@ REPORT ZSVH_TRSP_DOWNLOAD.
         GET_SRV_PATH_DIR_TRANS
           RETURNING
             VALUE(RV_PATH) type LOCALFILE
+          RAISING
+            LCX_EXCEPTION,
+        DOWNLOAD_FILE_SINGLE
+          IMPORTING
+            IV_SRV_FILE  type STRING
+            IV_CLI_FILE  type STRING
           RAISING
             LCX_EXCEPTION.
 
@@ -720,12 +726,13 @@ class lcl_tr_util IMPLEMENTATION.
 *     LCX_EXCEPTION,
 
     data:
+    lx_root         type ref to CX_ROOT,
     lv_path_data    type STRING,
     lv_path_cofl    type STRING,
-    lv_srv_data     type SAEPFAD,
-    lv_cli_data     type SAEPFAD,
-    lv_srv_cofl     type SAEPFAD,
-    lv_cli_cofl     type SAEPFAD,
+*    lv_srv_data     type SAEPFAD,
+*    lv_cli_data     type SAEPFAD,
+*    lv_srv_cofl     type SAEPFAD,
+*    lv_cli_cofl     type SAEPFAD,
     lv_file_sep     type C.
 
     field-symbols:
@@ -771,39 +778,32 @@ class lcl_tr_util IMPLEMENTATION.
         continue.
       endif.
 
-*     Do type conversions of paths.
-      lv_srv_data = <fs_alv_data>-PATH_DATA.
-      lv_cli_data = lv_path_data.
-      lv_srv_cofl = <fs_alv_data>-PATH_COFL.
-      lv_cli_cofl = lv_path_cofl.
-
-
 *     Download data file.
-      CALL FUNCTION 'ARCHIVFILE_SERVER_TO_CLIENT'
-        EXPORTING
-          PATH                   = lv_srv_data
-          TARGETPATH             = lv_cli_data
-        EXCEPTIONS
-          OTHERS                 = 99.
-      IF SY-SUBRC <> 0.
+      TRY.
+        DOWNLOAD_FILE_SINGLE(
+          EXPORTING
+            IV_SRV_FILE = <fs_alv_data>-PATH_DATA
+            IV_CLI_FILE = lv_path_data ).
+      CATCH CX_ROOT into lx_root.
         <fs_alv_data>-IS_TR_DATA = ABAP_FALSE.
-        <fs_alv_data>-MESSAGE    = 'Data file - Download error - Cofile is not downloaded'.
+        <fs_alv_data>-MESSAGE    = 'Download error - Data file is not downloaded'.
         continue.
-      ENDIF.
+      ENDTRY.
 
 *     Download cofiles file.
-      CALL FUNCTION 'ARCHIVFILE_SERVER_TO_CLIENT'
-        EXPORTING
-          PATH                   = lv_srv_cofl
-          TARGETPATH             = lv_cli_cofl
-        EXCEPTIONS
-          OTHERS                 = 99.
-      IF SY-SUBRC <> 0.
+      TRY.
+        DOWNLOAD_FILE_SINGLE(
+          EXPORTING
+            IV_SRV_FILE = <fs_alv_data>-PATH_COFL
+            IV_CLI_FILE = lv_path_cofl ).
+      CATCH CX_ROOT into lx_root.
         <fs_alv_data>-IS_TR_COFL = ABAP_FALSE.
-        <fs_alv_data>-MESSAGE    = 'Cofiles file - Download error'.
-      ELSE.
-        <fs_alv_data>-MESSAGE    = 'Files downloaded'.
-      ENDIF.
+        <fs_alv_data>-MESSAGE    = 'Download error - Cofiles file is not downloaded'.
+        continue.
+      ENDTRY.
+
+*     Set success message.
+      <fs_alv_data>-MESSAGE    = 'Files downloaded'.
 
 *     Set Icons
       <fs_alv_data>-IC_TR_DATA = GET_BOOL_ICON( <fs_alv_data>-IS_TR_DATA ).
@@ -811,6 +811,86 @@ class lcl_tr_util IMPLEMENTATION.
     endloop.
 
 
+  endmethod.
+
+  method DOWNLOAD_FILE_SINGLE.
+*   IMPORTING
+*     IV_SRV_FILE  type STRING
+*     IV_CLI_FILE  type STRING
+*   RAISING
+*     LCX_EXCEPTION,
+
+*   Code inspired by FM: ARCHIVFILE_SERVER_TO_CLIENT
+
+    data:
+    ls_bin_data type tbl1024,
+    lt_bin_data type standard table of tbl1024,
+    lv_target   type C length 200,
+    lv_bin_len  type I,
+    lv_len      type I,
+    lv_msg      type STRING.
+
+    field-symbols:
+    <binary> type x.
+
+******************************************
+*   Step 1. Read binary data into memory *
+******************************************
+    open dataset IV_SRV_FILE for input in binary mode message lv_msg.
+    if sy-subrc <> 0.
+      lv_msg = |Error reading file { IV_SRV_FILE } - { lv_msg }|.
+      RAISE EXCEPTION TYPE LCX_EXCEPTION
+      EXPORTING MSG_TEXT = lv_msg.
+
+      close dataset IV_SRV_FILE.
+    endif.
+
+    assign component 1 of structure ls_bin_data to <binary> CASTING type X.
+    if sy-subrc = 4.
+      assign component 0 of structure ls_bin_data to <binary> CASTING type X.
+    endif.
+
+    lv_bin_len = 0.
+    do.
+      clear ls_bin_data.
+      read dataset IV_SRV_FILE into <binary> length lv_len.
+      if sy-subrc <> 0.
+        if lv_len > 0.
+          add lv_len to lv_bin_len.
+          append ls_bin_data to lt_bin_data.
+        endif.
+        exit.
+      endif.
+      add lv_len to lv_bin_len.
+      append ls_bin_data to lt_bin_data.
+    enddo.
+
+    close dataset IV_SRV_FILE.
+
+***********************************************
+*   Step 2: Download binary content to client *
+***********************************************
+    lv_target = IV_CLI_FILE.
+
+    call function 'SCMS_DOWNLOAD'
+      exporting
+        filename = lv_target
+        filesize = lv_bin_len
+        binary   = 'X'
+        frontend = 'X'
+      tables
+        data     = lt_bin_data
+      exceptions
+        error    = 1
+        others   = 2.
+    if sy-subrc <> 0.
+      message id sy-msgid type 'S' number sy-msgno
+              with sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4
+              into lv_msg.
+      lv_msg = |Error writing file { IV_CLI_FILE } - { lv_msg }|.
+      RAISE EXCEPTION TYPE LCX_EXCEPTION
+      EXPORTING MSG_TEXT = lv_msg.
+    endif.
   endmethod.
 
   method DISPLAY_ALV_DATA.
@@ -923,7 +1003,7 @@ class lcl_tr_util IMPLEMENTATION.
 
   method DOES_SRV_FILE_EXIST.
 *   IMPORTING
-*     IV_FILE_PATH  type LOCALFILE
+*     IV_FILE_PATH  type STRING
 *   RETURNING
 *     VALUE(RV_FILE_EXISTS) type ABAP_BOOL,
 

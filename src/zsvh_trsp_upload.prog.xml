@@ -3,7 +3,7 @@
  <asx:abap xmlns:asx="http://www.sap.com/abapxml" version="1.0">
   <asx:values>
    <PROGDIR>
-    <NAME>ZSVH_TRSP_DOWNLOAD</NAME>
+    <NAME>ZSVH_TRSP_UPLOAD</NAME>
     <STATE>A</STATE>
     <VARCL>X</VARCL>
     <SUBC>1</SUBC>
@@ -15,8 +15,8 @@
    <TPOOL>
     <item>
      <ID>R</ID>
-     <ENTRY>Report ZSVH_TRSP_DOWNLOAD</ENTRY>
-     <LENGTH>25</LENGTH>
+     <ENTRY>Upload transport files to the ABAP Server</ENTRY>
+     <LENGTH>41</LENGTH>
     </item>
    </TPOOL>
   </asx:values>
